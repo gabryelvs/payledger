@@ -3,3 +3,7 @@ target-version = "py313"
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[lint.flake8-bugbear]
+# FastAPI uses these as argument defaults by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path"]
