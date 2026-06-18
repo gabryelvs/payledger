@@ -1,12 +1,13 @@
 from fastapi import FastAPI
 
-from app.routers import accounts, auth, wallets
+from app.routers import accounts, auth, transfers, wallets
 
 app = FastAPI(title="PayLedger", version="0.1.0")
 
 app.include_router(auth.router)
 app.include_router(accounts.router)
 app.include_router(wallets.router)
+app.include_router(transfers.router)
 
 
 @app.get("/healthz")
