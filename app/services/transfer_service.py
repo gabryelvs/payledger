@@ -6,6 +6,7 @@ from app.models.ledger import LedgerEntry, Transaction
 from app.models.user import User
 from app.models.wallet import Wallet
 from app.security.passwords import hash_password
+from app.services.events import record_event
 from app.services.ledger import assert_balanced
 
 TREASURY_ACCOUNT_NAME = "__treasury__"
@@ -78,6 +79,18 @@ def transfer(
 
     src.balance_minor -= amount_minor
     dst.balance_minor += amount_minor
+
+    record_event(
+        db,
+        "transfer.completed",
+        {
+            "transaction_id": txn.id,
+            "from_wallet_id": src.id,
+            "to_wallet_id": dst.id,
+            "amount_minor": amount_minor,
+            "currency": currency,
+        },
+    )
 
     db.commit()
     db.refresh(txn)
