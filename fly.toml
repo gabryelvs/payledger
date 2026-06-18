@@ -1,0 +1,32 @@
+# Fly.io deployment config for PayLedger.
+# Usage:
+#   fly launch --no-deploy          # create the app (edit name below first)
+#   fly postgres create             # provision Postgres, then `fly postgres attach`
+#   fly secrets set JWT_SECRET=...   REDIS_URL=...   # set runtime secrets
+#   fly deploy                      # build + release (runs migrations, see [deploy])
+
+app = "payledger"
+primary_region = "lhr"  # London
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "alembic upgrade head"
+
+[env]
+  ACCESS_TTL_MIN = "15"
+  REFRESH_TTL_DAYS = "7"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "2s"
+  method = "GET"
+  path = "/healthz"
