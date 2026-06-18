@@ -36,3 +36,24 @@ def test_transfer_insufficient_returns_422():
     )
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "INSUFFICIENT_FUNDS"
+
+
+def test_idempotent_replay_same_transaction():
+    from app.db.session import SessionLocal
+    from app.services.transfer_service import deposit
+
+    h, w1, w2 = _setup()
+    with SessionLocal() as s:
+        deposit(s, w1, 1000, "GBP")
+    payload = {
+        "from_wallet_id": w1,
+        "to_wallet_id": w2,
+        "amount_minor": 200,
+        "currency": "GBP",
+    }
+    k = {"Idempotency-Key": "abc-123", **h}
+    r1 = client.post("/transfers", json=payload, headers=k)
+    r2 = client.post("/transfers", json=payload, headers=k)
+    assert r1.status_code == 201
+    assert r1.json() == r2.json()
+

@@ -1,9 +1,15 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.account import Account
 from app.models.ledger import LedgerEntry, Transaction
+from app.models.user import User
 from app.models.wallet import Wallet
+from app.security.passwords import hash_password
 from app.services.ledger import assert_balanced
+
+TREASURY_ACCOUNT_NAME = "__treasury__"
+TREASURY_OPENING_BALANCE = 10**18  # represents the money-supply source
 
 
 class WalletNotFound(Exception):
@@ -76,3 +82,48 @@ def transfer(
     db.commit()
     db.refresh(txn)
     return txn
+
+
+def _ensure_system_user(db: Session) -> int:
+    sys = db.execute(
+        select(User).where(User.email == "system@payledger")
+    ).scalar_one_or_none()
+    if sys is None:
+        sys = User(email="system@payledger", password_hash=hash_password("disabled"))
+        db.add(sys)
+        db.flush()
+    return sys.id
+
+
+def _treasury_wallet(db: Session, currency: str) -> Wallet:
+    acc = db.execute(
+        select(Account).where(Account.name == TREASURY_ACCOUNT_NAME)
+    ).scalar_one_or_none()
+    if acc is None:
+        acc = Account(user_id=_ensure_system_user(db), name=TREASURY_ACCOUNT_NAME)
+        db.add(acc)
+        db.flush()
+    w = db.execute(
+        select(Wallet)
+        .where(Wallet.account_id == acc.id, Wallet.currency == currency)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if w is None:
+        w = Wallet(
+            account_id=acc.id,
+            currency=currency,
+            balance_minor=TREASURY_OPENING_BALANCE,
+        )
+        db.add(w)
+        db.flush()
+    return w
+
+
+def deposit(
+    db: Session, wallet_id: int, amount_minor: int, currency: str
+) -> Transaction:
+    if amount_minor <= 0:
+        raise ValueError("amount_minor must be positive")
+    currency = currency.upper()
+    treasury = _treasury_wallet(db, currency)
+    return transfer(db, treasury.id, wallet_id, amount_minor, currency)
