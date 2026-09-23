@@ -7,6 +7,7 @@ from app.models.user import User
 from app.models.wallet import Wallet
 from app.security.passwords import hash_password
 from app.services.events import record_event
+from app.services.idempotency import claim, save_response
 from app.services.ledger import assert_balanced
 from app.services.wallet_service import get_owned_wallet
 
@@ -52,6 +53,75 @@ def transfer(
     own raises ``WalletNotFound``, exactly like a missing one. System movements such
     as treasury deposits pass ``None``.
     """
+    txn = _post_transfer(
+        db,
+        from_wallet_id,
+        to_wallet_id,
+        amount_minor,
+        currency,
+        idempotency_key,
+        owner_user_id=owner_user_id,
+    )
+    db.commit()
+    db.refresh(txn)
+    return txn
+
+
+def submit_transfer(
+    db: Session,
+    user_id: int,
+    from_wallet_id: int,
+    to_wallet_id: int,
+    amount_minor: int,
+    currency: str,
+    idempotency_key: str | None,
+    request_hash: str,
+) -> dict:
+    """A user's transfer request, made idempotent when a key is supplied.
+
+    The key claim, the ledger entries, the balance updates, the event and the stored
+    response all commit (or roll back) as ONE database transaction. See
+    app/services/idempotency.py for why that makes concurrent retries safe.
+    Returns the response body; a replay returns the original body.
+    """
+    try:
+        if idempotency_key:
+            cached = claim(db, user_id, idempotency_key, request_hash)
+            if cached is not None:
+                db.rollback()  # nothing was written; just end the transaction
+                return cached
+        txn = _post_transfer(
+            db,
+            from_wallet_id,
+            to_wallet_id,
+            amount_minor,
+            currency,
+            idempotency_key,
+            owner_user_id=user_id,
+        )
+        result = {"transaction_id": txn.id, "status": txn.status}
+        if idempotency_key:
+            save_response(db, user_id, idempotency_key, result)
+        db.commit()
+        return result
+    except Exception:
+        # Undo the partial transfer and release the key claim together, promptly, so a
+        # concurrent duplicate waiting on the key can proceed.
+        db.rollback()
+        raise
+
+
+def _post_transfer(
+    db: Session,
+    from_wallet_id: int,
+    to_wallet_id: int,
+    amount_minor: int,
+    currency: str,
+    idempotency_key: str | None,
+    *,
+    owner_user_id: int | None,
+) -> Transaction:
+    """Write a balanced transfer into the caller's open transaction. Does not commit."""
     if amount_minor <= 0:
         raise ValueError("amount_minor must be positive")
     currency = currency.upper()
@@ -107,8 +177,7 @@ def transfer(
         },
     )
 
-    db.commit()
-    db.refresh(txn)
+    db.flush()
     return txn
 
 
