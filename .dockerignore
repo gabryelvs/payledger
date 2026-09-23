@@ -1,0 +1,15 @@
+# Keep the build context (and the image) free of local state and secrets.
+.git
+.github
+.venv
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+tests/
+docs/
