@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.account import Account
@@ -13,6 +14,7 @@ from app.services.wallet_service import get_owned_wallet
 
 TREASURY_ACCOUNT_NAME = "__treasury__"
 TREASURY_OPENING_BALANCE = 10**18  # represents the money-supply source
+SYSTEM_USER_EMAIL = "system@payledger"
 
 
 class WalletNotFound(Exception):
@@ -188,14 +190,28 @@ def _post_transfer(
 
 
 def _ensure_system_user(db: Session) -> int:
-    sys = db.execute(
-        select(User).where(User.email == "system@payledger")
+    sys_id = db.execute(
+        select(User.id).where(User.email == SYSTEM_USER_EMAIL)
     ).scalar_one_or_none()
-    if sys is None:
-        sys = User(email="system@payledger", password_hash=hash_password("disabled"))
-        db.add(sys)
-        db.flush()
-    return sys.id
+    if sys_id is None:
+        # Race-safe creation: concurrent first-ever deposits can all miss the SELECT
+        # above and all reach here together. INSERT ... ON CONFLICT DO NOTHING turns
+        # every loser's insert into a no-op against the unique index on email instead
+        # of an IntegrityError (the bug: most of N concurrent first deposits got a 500
+        # from a unique violation creating this row twice); the re-select then returns
+        # whichever row committed, ours or a concurrent caller's. This has to be a
+        # runtime fix rather than a row seeded by an Alembic migration, because the
+        # test suite builds its schema with Base.metadata.create_all(), which runs no
+        # migrations and seeds nothing.
+        db.execute(
+            pg_insert(User)
+            .values(email=SYSTEM_USER_EMAIL, password_hash=hash_password("disabled"))
+            .on_conflict_do_nothing(index_elements=[User.email])
+        )
+        sys_id = db.execute(
+            select(User.id).where(User.email == SYSTEM_USER_EMAIL)
+        ).scalar_one()
+    return sys_id
 
 
 def _treasury_wallet(db: Session, currency: str) -> Wallet:
@@ -203,30 +219,57 @@ def _treasury_wallet(db: Session, currency: str) -> Wallet:
     # anything, including "__treasury__". The system user's address has no dot in
     # its domain, so it cannot be registered through the API.
     system_user_id = _ensure_system_user(db)
-    acc = db.execute(
-        select(Account).where(
+    acc_id = db.execute(
+        select(Account.id).where(
             Account.name == TREASURY_ACCOUNT_NAME, Account.user_id == system_user_id
         )
     ).scalar_one_or_none()
-    if acc is None:
-        acc = Account(user_id=system_user_id, name=TREASURY_ACCOUNT_NAME)
-        db.add(acc)
-        db.flush()
-    w = db.execute(
-        select(Wallet)
-        .where(Wallet.account_id == acc.id, Wallet.currency == currency)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).scalar_one_or_none()
-    if w is None:
-        w = Wallet(
-            account_id=acc.id,
-            currency=currency,
-            balance_minor=TREASURY_OPENING_BALANCE,
+    if acc_id is None:
+        # Race-safe for the same reason as _ensure_system_user above.
+        # uq_treasury_account_per_owner (app/models/account.py: a partial unique index
+        # on accounts.user_id where name = '__treasury__') is what gives ON CONFLICT
+        # something to target, without constraining ordinary users' account names.
+        db.execute(
+            pg_insert(Account)
+            .values(user_id=system_user_id, name=TREASURY_ACCOUNT_NAME)
+            .on_conflict_do_nothing(
+                index_elements=[Account.user_id],
+                index_where=Account.name == TREASURY_ACCOUNT_NAME,
+            )
         )
-        db.add(w)
-        db.flush()
-    return w
+        acc_id = db.execute(
+            select(Account.id).where(
+                Account.name == TREASURY_ACCOUNT_NAME, Account.user_id == system_user_id
+            )
+        ).scalar_one()
+
+    # No with_for_update here: locking the treasury row before _post_transfer's
+    # id-ordered locking ran could deadlock against a direct transfer to the treasury
+    # (which locks both wallets in id order from the start) -- one holding the
+    # treasury lock and waiting on the wallet, the other holding the wallet lock and
+    # waiting on the treasury. _lock_wallet below locks this row again, in order, once
+    # _post_transfer runs, so an unlocked read here is enough: only .id is used before
+    # that point.
+    w_id = db.execute(
+        select(Wallet.id).where(Wallet.account_id == acc_id, Wallet.currency == currency)
+    ).scalar_one_or_none()
+    if w_id is None:
+        # Race-safe via the existing uq_wallet_account_currency constraint.
+        db.execute(
+            pg_insert(Wallet)
+            .values(
+                account_id=acc_id,
+                currency=currency,
+                balance_minor=TREASURY_OPENING_BALANCE,
+            )
+            .on_conflict_do_nothing(index_elements=["account_id", "currency"])
+        )
+        w_id = db.execute(
+            select(Wallet.id).where(
+                Wallet.account_id == acc_id, Wallet.currency == currency
+            )
+        ).scalar_one()
+    return db.get(Wallet, w_id)
 
 
 def deposit(

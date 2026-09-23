@@ -23,9 +23,12 @@ Backend only (no UI): the API ships with interactive Swagger docs at `/docs`.
   claimed with `INSERT ... ON CONFLICT DO NOTHING` inside the same database transaction
   as the transfer, so parallel retries cannot both execute. Proven by a test that fires 10
   overlapping requests with one key and checks exactly one transfer happens, with no 500s.
-- **Ownership** — callers can only move money out of, and read, their own wallets and
-  transactions. Someone else's resource gets the same 404 as a missing one, so ids can't
-  be probed.
+- **Ownership** — a caller can only move money out of, and read, their own wallets and
+  transactions: another user's wallet, statement or transaction returns the exact same
+  404 body as a missing id. That is not the same as ids being unprobeable in general —
+  a transfer's destination can be any wallet (that's what a transfer is), so making one
+  reveals whether a destination id exists and whether its currency matches; and
+  response timing is not constant-time.
 
 ## Tech stack
 
@@ -59,7 +62,7 @@ DEMO_DEPOSITS_ENABLED=true uvicorn app.main:app --reload
 
 ```bash
 docker compose up -d        # tests use a real Postgres
-pytest                      # 59 tests, incl. the concurrency proofs
+pytest                      # 61 tests, incl. the concurrency proofs
 ruff check .
 ```
 

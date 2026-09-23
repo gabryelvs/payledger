@@ -4,6 +4,8 @@ Lets a demo user fund their OWN wallet from the treasury, through the normal
 double-entry path, when DEMO_DEPOSITS_ENABLED is on. Off by default.
 """
 
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -11,9 +13,11 @@ from sqlalchemy import func, select
 from app.config import Settings, settings
 from app.db.session import SessionLocal
 from app.main import app
+from app.models.account import Account
 from app.models.ledger import LedgerEntry
 from app.models.wallet import Wallet
 from app.services.demo_deposits import DEMO_DEPOSIT_MAX_MINOR
+from app.services.transfer_service import TREASURY_ACCOUNT_NAME
 
 client = TestClient(app)
 
@@ -151,3 +155,56 @@ def test_rejects_non_positive_amounts(enabled, amount):
 
     assert _deposit(h, acc, wal, amount).status_code == 422
     assert _balance(wal) == 0
+
+
+def test_concurrent_first_ever_deposits_all_succeed(enabled):
+    """20 different users' very first deposit, at once.
+
+    Nothing has ever deposited before, so the system user, the treasury account and
+    the treasury wallet all still need to be created -- and all 20 requests race to
+    create them. On a fresh schema this used to give a unique violation on the system
+    user's email (creating it twice), surfaced as a 500 to the caller, on most of the
+    20 requests.
+    """
+    client = TestClient(app, raise_server_exceptions=False)
+    wallets = []
+    for i in range(20):
+        h = _user(f"race{i}@x.com")
+        acc, wal = _wallet(h)
+        wallets.append((h, acc, wal))
+
+    responses: list = [None] * 20
+    lock = threading.Lock()
+
+    def worker(i, h, acc, wal):
+        r = client.post(
+            f"/accounts/{acc}/wallets/{wal}/demo-deposit",
+            json={"amount_minor": 1_000},
+            headers=h,
+        )
+        with lock:
+            responses[i] = r
+
+    threads = [
+        threading.Thread(target=worker, args=(i, *w)) for i, w in enumerate(wallets)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    statuses = [r.status_code if r is not None else None for r in responses]
+    assert statuses == [201] * 20, statuses
+
+    with SessionLocal() as s:
+        for _, _, wal in wallets:
+            assert s.get(Wallet, wal).balance_minor == 1_000
+        # money is conserved: every ledger entry, across every transaction, sums to 0
+        assert s.execute(select(func.sum(LedgerEntry.amount_minor))).scalar_one() == 0
+        # exactly one treasury account was created despite the race
+        treasury_accounts = s.execute(
+            select(func.count())
+            .select_from(Account)
+            .where(Account.name == TREASURY_ACCOUNT_NAME)
+        ).scalar_one()
+        assert treasury_accounts == 1

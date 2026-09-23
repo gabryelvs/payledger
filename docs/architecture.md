@@ -68,10 +68,14 @@ sequenceDiagram
   either rule yet (a deferred constraint trigger summing entries per transaction would
   be the next step).
 - **Race safety** — concurrent transfers on a wallet are serialised by
-  `SELECT ... FOR UPDATE`, with wallets locked in id order to avoid deadlocks. The locked
-  read always refreshes the row (`populate_existing`), so a wallet object loaded earlier
-  in the session can never supply a stale balance. Proven by
-  `tests/integration/test_concurrent_transfers.py`.
+  `SELECT ... FOR UPDATE`, with every wallet lock (including the treasury's, on a
+  deposit) taken in id order to avoid deadlocks. The locked read always refreshes the
+  row (`populate_existing`), so a wallet object loaded earlier in the session can never
+  supply a stale balance. Proven by
+  `tests/services/test_transfer_service.py::test_locked_balance_is_fresh_even_if_the_wallet_was_loaded_earlier`
+  (the stale-balance fix) and
+  `tests/integration/test_concurrent_transfers.py` (no lost updates under concurrency,
+  and no deadlock between demo deposits and transfers to the treasury).
 - **Idempotency** — repeating `POST /transfers` with the same `Idempotency-Key` returns the
   original response instead of executing twice, including when the retries arrive in
   parallel: PostgreSQL makes the second `INSERT` of a key wait for the first
