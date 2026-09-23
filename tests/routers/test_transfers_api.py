@@ -119,3 +119,13 @@ def test_failed_transfer_does_not_consume_the_key():
     _fund(w1)
     assert client.post("/transfers", json=_payload(w1, w2), headers=k).status_code == 201
     assert _balance(w2) == 200
+
+
+def test_overlong_idempotency_key_is_a_client_error_not_a_500():
+    h, w1, w2 = _setup()
+    _fund(w1)
+    safe_client = TestClient(app, raise_server_exceptions=False)
+    k = {"Idempotency-Key": "k" * 101, **h}  # column holds 100 chars
+    r = safe_client.post("/transfers", json=_payload(w1, w2), headers=k)
+    assert r.status_code == 422
+    assert _balance(w1) == 1000

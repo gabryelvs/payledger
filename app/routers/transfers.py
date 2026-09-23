@@ -31,7 +31,9 @@ def make_transfer(
     body: TransferIn,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", max_length=100
+    ),
 ) -> JSONResponse:
     try:
         result = submit_transfer(
