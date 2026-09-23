@@ -8,6 +8,7 @@ from app.models.wallet import Wallet
 from app.security.passwords import hash_password
 from app.services.events import record_event
 from app.services.ledger import assert_balanced
+from app.services.wallet_service import get_owned_wallet
 
 TREASURY_ACCOUNT_NAME = "__treasury__"
 TREASURY_OPENING_BALANCE = 10**18  # represents the money-supply source
@@ -41,10 +42,24 @@ def transfer(
     amount_minor: int,
     currency: str,
     idempotency_key: str | None = None,
+    *,
+    owner_user_id: int | None = None,
 ) -> Transaction:
+    """Move money between two wallets as one balanced, committed transaction.
+
+    ``owner_user_id`` is the caller for user-initiated transfers: the *source* wallet
+    must belong to them (the destination may belong to anyone). A source they do not
+    own raises ``WalletNotFound``, exactly like a missing one. System movements such
+    as treasury deposits pass ``None``.
+    """
     if amount_minor <= 0:
         raise ValueError("amount_minor must be positive")
     currency = currency.upper()
+
+    if owner_user_id is not None and (
+        get_owned_wallet(db, owner_user_id, from_wallet_id) is None
+    ):
+        raise WalletNotFound(from_wallet_id)
 
     # Lock wallet rows in a deterministic order to avoid deadlocks.
     first, second = sorted([from_wallet_id, to_wallet_id])

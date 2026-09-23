@@ -53,6 +53,7 @@ def make_transfer(
             body.amount_minor,
             body.currency,
             idempotency_key,
+            owner_user_id=user.id,
         )
     except InsufficientFunds:
         return error_response(
