@@ -212,11 +212,15 @@ def _treasury_wallet(db: Session, currency: str) -> Wallet:
         acc = Account(user_id=system_user_id, name=TREASURY_ACCOUNT_NAME)
         db.add(acc)
         db.flush()
+    # No with_for_update here: locking the treasury row before _post_transfer's
+    # id-ordered locking ran could deadlock against a direct transfer to the treasury
+    # (which locks both wallets in id order from the start) -- one holding the
+    # treasury lock and waiting on the wallet, the other holding the wallet lock and
+    # waiting on the treasury. _lock_wallet below locks this row again, in order, once
+    # _post_transfer runs, so an unlocked read here is enough: only .id is used before
+    # that point.
     w = db.execute(
-        select(Wallet)
-        .where(Wallet.account_id == acc.id, Wallet.currency == currency)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+        select(Wallet).where(Wallet.account_id == acc.id, Wallet.currency == currency)
     ).scalar_one_or_none()
     if w is None:
         w = Wallet(
