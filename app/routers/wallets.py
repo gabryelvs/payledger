@@ -8,8 +8,15 @@ from app.deps import current_user
 from app.errors import error_response
 from app.models.ledger import LedgerEntry
 from app.models.user import User
-from app.schemas.wallet import WalletIn, WalletOut
+from app.schemas.wallet import DemoDepositIn, DemoDepositOut, WalletIn, WalletOut
 from app.services.account_service import get_owned_account
+from app.services.demo_deposits import (
+    DEMO_DEPOSIT_MAX_MINOR,
+    DemoDepositLimitExceeded,
+    DemoDepositsDisabled,
+    demo_deposit,
+)
+from app.services.transfer_service import WalletNotFound
 from app.services.wallet_service import get_owned_wallet, list_wallets, open_wallet
 
 router = APIRouter(prefix="/accounts/{account_id}/wallets", tags=["wallets"])
@@ -78,3 +85,39 @@ def statement(
         }
         for e in rows
     ]
+
+
+@router.post(
+    "/{wallet_id}/demo-deposit",
+    response_model=DemoDepositOut,
+    status_code=201,
+    summary="Demo only: fund your own wallet from the treasury",
+    description=(
+        "Credits one of the caller's own wallets from the system treasury, as a "
+        "normal balanced ledger transaction. Capped at "
+        f"{DEMO_DEPOSIT_MAX_MINOR} minor units per call. Only available when the "
+        "deployment sets DEMO_DEPOSITS_ENABLED=true; otherwise returns 403."
+    ),
+)
+def demo_deposit_(
+    account_id: int,
+    wallet_id: int,
+    body: DemoDepositIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> DemoDepositOut | JSONResponse:
+    try:
+        txn, balance = demo_deposit(db, user.id, account_id, wallet_id, body.amount_minor)
+    except DemoDepositsDisabled:
+        return error_response(
+            403, "DEMO_DEPOSITS_DISABLED", "demo deposits are not enabled on this server"
+        )
+    except WalletNotFound:
+        return _wallet_not_found()
+    except DemoDepositLimitExceeded:
+        return error_response(
+            422,
+            "DEMO_DEPOSIT_LIMIT_EXCEEDED",
+            f"demo deposits are capped at {DEMO_DEPOSIT_MAX_MINOR} minor units per call",
+        )
+    return DemoDepositOut(transaction_id=txn.id, status=txn.status, balance_minor=balance)
