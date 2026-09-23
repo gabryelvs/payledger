@@ -1,11 +1,11 @@
 # Fly.io deployment config for PayLedger.
 # Usage:
-#   fly launch --no-deploy          # create the app (edit name below first)
+#   fly launch --no-deploy          # create the app (the live demo is payledger-gv)
 #   fly postgres create             # provision Postgres, then `fly postgres attach`
 #   fly secrets set JWT_SECRET=...  # set runtime secrets
 #   fly deploy                      # build + release (runs migrations, see [deploy])
 
-app = "payledger"
+app = "payledger-gv"
 primary_region = "lhr"  # London
 
 [build]
@@ -17,6 +17,10 @@ primary_region = "lhr"  # London
 [env]
   ACCESS_TTL_MIN = "15"
   REFRESH_TTL_DAYS = "7"
+  # The public demo enables demo deposits (default off in code; see README
+  # "Demo deposits"). Set it on the app, e.g.:
+  #   fly secrets set DEMO_DEPOSITS_ENABLED=true -a payledger-gv
+  # or add DEMO_DEPOSITS_ENABLED = "true" here.
 
 [http_service]
   internal_port = 8000
