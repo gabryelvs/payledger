@@ -10,9 +10,11 @@ flowchart TD
     Client[Client / Swagger UI] --> API[API layer: routers + Pydantic schemas]
     API --> SVC[Service layer: transfers, ledger, auth, idempotency]
     SVC --> REPO[Data layer: SQLAlchemy models]
-    REPO --> PG[(PostgreSQL — source of truth)]
-    SVC --> RD[(Redis — idempotency / rate limiting)]
+    REPO --> PG[(PostgreSQL — ledger, balances, idempotency keys)]
 ```
+
+PostgreSQL is the only datastore. Idempotency keys are rows in the same database, so
+they commit atomically with the transfer they protect. There is no rate limiting yet.
 
 - **API layer** (`app/routers`, `app/schemas`) — request validation, auth dependencies,
   HTTP status and the structured error shape. No business rules.

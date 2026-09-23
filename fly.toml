@@ -2,7 +2,7 @@
 # Usage:
 #   fly launch --no-deploy          # create the app (edit name below first)
 #   fly postgres create             # provision Postgres, then `fly postgres attach`
-#   fly secrets set JWT_SECRET=...   REDIS_URL=...   # set runtime secrets
+#   fly secrets set JWT_SECRET=...  # set runtime secrets
 #   fly deploy                      # build + release (runs migrations, see [deploy])
 
 app = "payledger"

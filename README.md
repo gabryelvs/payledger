@@ -21,19 +21,20 @@ Backend only (no UI): the API ships with interactive Swagger docs at `/docs`.
 
 ## Tech stack
 
-Python 3.13 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic · PostgreSQL · Redis ·
+Python 3.13 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic · PostgreSQL ·
 pytest · ruff · Docker Compose · GitHub Actions.
 
 ## Architecture
 
 Layered: **API** (routers + schemas) → **services** (business rules) → **models** (SQLAlchemy)
-over PostgreSQL, with Redis for idempotency/rate limiting. See
+over PostgreSQL, which is the only datastore: idempotency keys live there too. There is
+no rate limiting. See
 [docs/architecture.md](docs/architecture.md) for diagrams and the transfer sequence.
 
 ## Run locally
 
 ```bash
-# 1. Start Postgres + Redis
+# 1. Start Postgres
 docker compose up -d
 
 # 2. Install and run migrations
