@@ -1,0 +1,8 @@
+{
+  "regions": ["lhr1"],
+  "functions": {
+    "app/main.py": {
+      "excludeFiles": "{tests/**,migrations/**,docs/**}"
+    }
+  }
+}
