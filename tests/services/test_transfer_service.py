@@ -46,3 +46,17 @@ def test_currency_mismatch_raises(db):
     db.commit()
     with pytest.raises(CurrencyMismatch):
         transfer(db, g.id, usd.id, 100, "GBP")
+
+
+def test_locked_balance_is_fresh_even_if_the_wallet_was_loaded_earlier(db):
+    from app.db.session import SessionLocal
+
+    w1, w2 = _two_wallets(db)  # w1 holds 1000
+    with SessionLocal() as mine, SessionLocal() as other:
+        seen = mine.get(Wallet, w1.id)  # e.g. an ownership check that kept the object
+        assert seen.balance_minor == 1000
+        transfer(other, w1.id, w2.id, 300, "GBP")  # commits: w1 is now 700
+        transfer(mine, w1.id, w2.id, 100, "GBP")  # must debit 700, not the stale 1000
+    db.expire_all()
+    assert db.get(Wallet, w1.id).balance_minor == 600
+    assert db.get(Wallet, w2.id).balance_minor == 400

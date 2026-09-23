@@ -28,8 +28,14 @@ class InsufficientFunds(Exception):
 
 
 def _lock_wallet(db: Session, wallet_id: int) -> Wallet:
+    # populate_existing: if this session already holds the Wallet object (loaded
+    # before the lock, e.g. by an ownership check), SQLAlchemy would otherwise keep
+    # its old attribute values and we would debit a stale balance (a lost update).
     w = db.execute(
-        select(Wallet).where(Wallet.id == wallet_id).with_for_update()
+        select(Wallet)
+        .where(Wallet.id == wallet_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     ).scalar_one_or_none()
     if w is None:
         raise WalletNotFound(wallet_id)
@@ -204,6 +210,7 @@ def _treasury_wallet(db: Session, currency: str) -> Wallet:
         select(Wallet)
         .where(Wallet.account_id == acc.id, Wallet.currency == currency)
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).scalar_one_or_none()
     if w is None:
         w = Wallet(
