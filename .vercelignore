@@ -1,0 +1,7 @@
+.venv
+tests
+docs
+migrations
+htmlcov
+.pytest_cache
+*.egg-info

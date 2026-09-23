@@ -104,7 +104,7 @@ can try real transfers, `POST /accounts/{id}/wallets/{wid}/demo-deposit` exposes
 with guard rails:
 
 - **Off by default.** Enabled only when the environment sets `DEMO_DEPOSITS_ENABLED=true`;
-  otherwise it returns `403 DEMO_DEPOSITS_DISABLED`. The public demo on Fly sets it; a
+  otherwise it returns `403 DEMO_DEPOSITS_DISABLED`. The public demo sets it; a
   production deployment would not.
 - **Own wallets only.** Anyone else's wallet gets `404 WALLET_NOT_FOUND`.
 - **Capped** at 100000 minor units (1,000.00) per call (`422 DEMO_DEPOSIT_LIMIT_EXCEEDED`).
@@ -118,6 +118,46 @@ with guard rails:
 | `ACCESS_TTL_MIN` | `15` | Access token lifetime (minutes) |
 | `REFRESH_TTL_DAYS` | `7` | Refresh token lifetime (days) |
 | `DEMO_DEPOSITS_ENABLED` | `false` | Enables the demo deposit endpoint (see above) |
+
+## Deploy
+
+The API deploys as a [Vercel Function](https://vercel.com/docs/functions/runtimes/python)
+(FastAPI on Python) backed by [Neon](https://neon.tech) serverless Postgres — both on
+free tiers. Vercel auto-detects the `app` instance in `app/main.py` and installs
+dependencies from `pyproject.toml`; `vercel.json` pins the function's region to `lhr1`
+(London) and excludes `tests/`, `migrations/` and `docs/` from its bundle, and
+`.python-version` pins the runtime to Python 3.13 (Vercel defaults to 3.12 otherwise).
+The Hobby plan caps a function at 10 seconds and a 500 MB bundle.
+
+**Environment variables** — set these in the Vercel project's dashboard, not in any
+committed file:
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Neon's pooled connection string (the `-pooler` host), e.g. `postgresql://user:pass@ep-xxx-pooler.eu-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require` |
+| `JWT_SECRET` | a long random value |
+| `DEMO_DEPOSITS_ENABLED` | `true`, for the public demo |
+
+A `postgres://` or `postgresql://` URL is rewritten to `postgresql+psycopg://`
+automatically (see `app/config.py`), so Neon's connection string works as-is. On Vercel
+the app also opens the database with `NullPool` and `prepare_threshold=None` instead of
+its normal local pool (see `app/db/session.py`): each function invocation gets its own
+short-lived connection through Neon's PgBouncer pooler, and disabling psycopg3's
+server-side prepared statements avoids errors under PgBouncer's transaction-mode
+pooling. Neon also suspends compute when idle, so an invocation's first query after a
+quiet spell can be slower while it wakes back up.
+
+**Migrations run separately** — Vercel has no release-phase hook, so apply them by hand
+*before* traffic depends on the new schema, against Neon's **direct** (non-pooler)
+connection string:
+
+```bash
+DATABASE_URL='postgresql+psycopg://user:pass@ep-xxx.eu-west-2.aws.neon.tech/neondb?sslmode=require' \
+  alembic upgrade head
+```
+
+**Live demo:** https://payledger-gv.vercel.app/docs — the Vercel project is named
+`payledger-gv`; this URL only resolves once that project exists and has been deployed.
 
 ## API summary
 

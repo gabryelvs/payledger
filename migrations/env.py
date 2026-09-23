@@ -10,7 +10,12 @@ from app.db.base import Base
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# set_main_option() stores the value in a configparser section, which treats
+# a bare % as the start of %(name)s-style interpolation. A DATABASE_URL can
+# legitimately contain a literal % (e.g. a URL-encoded password), so escape
+# it as %% or set_main_option raises ValueError; get_main_option() below
+# un-escapes it back to the original URL.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
