@@ -199,11 +199,17 @@ def _ensure_system_user(db: Session) -> int:
 
 
 def _treasury_wallet(db: Session, currency: str) -> Wallet:
+    # Match on the owner as well as the name: users may name their own accounts
+    # anything, including "__treasury__". The system user's address has no dot in
+    # its domain, so it cannot be registered through the API.
+    system_user_id = _ensure_system_user(db)
     acc = db.execute(
-        select(Account).where(Account.name == TREASURY_ACCOUNT_NAME)
+        select(Account).where(
+            Account.name == TREASURY_ACCOUNT_NAME, Account.user_id == system_user_id
+        )
     ).scalar_one_or_none()
     if acc is None:
-        acc = Account(user_id=_ensure_system_user(db), name=TREASURY_ACCOUNT_NAME)
+        acc = Account(user_id=system_user_id, name=TREASURY_ACCOUNT_NAME)
         db.add(acc)
         db.flush()
     w = db.execute(
