@@ -13,36 +13,45 @@ Backend only (no UI): the API ships with interactive Swagger docs at `/docs`.
   ISO 4217 currency. No floats touch money, so no rounding drift.
 - **Double-entry invariant** — each transaction writes ≥2 ledger entries whose signed
   amounts sum to zero; entries are append-only (corrections are new compensating entries).
+  Both rules live in the service layer (the balance is checked before every insert, and no
+  code path updates or deletes entries); the database itself does not enforce them yet.
 - **Race-safe transfers** — concurrent transfers on the same wallet are serialised with
   `SELECT ... FOR UPDATE` (wallets locked in id order to avoid deadlocks). No lost updates,
   no overdraw. Proven by a concurrency test that fires 20 parallel transfers.
-- **Idempotency** — write endpoints accept an `Idempotency-Key`; a retried request returns
-  the original result instead of double-charging.
+- **Idempotency** — `POST /transfers` accepts an `Idempotency-Key` (scoped per user); a
+  retried request returns the original result instead of double-charging. The key is
+  claimed with `INSERT ... ON CONFLICT DO NOTHING` inside the same database transaction
+  as the transfer, so parallel retries cannot both execute. Proven by a test that fires 10
+  overlapping requests with one key and checks exactly one transfer happens, with no 500s.
+- **Ownership** — callers can only move money out of, and read, their own wallets and
+  transactions. Someone else's resource gets the same 404 as a missing one, so ids can't
+  be probed.
 
 ## Tech stack
 
-Python 3.13 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic · PostgreSQL · Redis ·
+Python 3.13 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic · PostgreSQL ·
 pytest · ruff · Docker Compose · GitHub Actions.
 
 ## Architecture
 
 Layered: **API** (routers + schemas) → **services** (business rules) → **models** (SQLAlchemy)
-over PostgreSQL, with Redis for idempotency/rate limiting. See
+over PostgreSQL, which is the only datastore: idempotency keys live there too. There is
+no rate limiting. See
 [docs/architecture.md](docs/architecture.md) for diagrams and the transfer sequence.
 
 ## Run locally
 
 ```bash
-# 1. Start Postgres + Redis
+# 1. Start Postgres
 docker compose up -d
 
 # 2. Install and run migrations
-python -m venv .venv && source .venv/Scripts/activate   # Windows
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 alembic upgrade head
 
-# 3. Start the API
-uvicorn app.main:app --reload
+# 3. Start the API (the flag is optional: it enables demo deposits, see below)
+DEMO_DEPOSITS_ENABLED=true uvicorn app.main:app --reload
 # open http://localhost:8000/docs
 ```
 
@@ -50,7 +59,7 @@ uvicorn app.main:app --reload
 
 ```bash
 docker compose up -d        # tests use a real Postgres
-pytest                      # ~30 tests incl. the concurrency proof
+pytest                      # 59 tests, incl. the concurrency proofs
 ruff check .
 ```
 
@@ -73,14 +82,39 @@ W1=$(curl -s -X POST localhost:8000/accounts/$A1/wallets -H "authorization: Bear
 W2=$(curl -s -X POST localhost:8000/accounts/$A2/wallets -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' -d '{"currency":"GBP"}' | jq .id)
 
+# Fund W1 (demo deployments only, see "Demo deposits") — 10000 = £100.00
+curl -X POST localhost:8000/accounts/$A1/wallets/$W1/demo-deposit \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"amount_minor":10000}'
+
 # Transfer (idempotent) — amounts are minor units, so 500 = £5.00
 curl -X POST localhost:8000/transfers -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' -H 'Idempotency-Key: demo-1' \
   -d "{\"from_wallet_id\":$W1,\"to_wallet_id\":$W2,\"amount_minor\":500,\"currency\":\"GBP\"}"
 ```
 
-> Note: real balances are funded from a system *treasury* wallet via `deposit()` — wired
-> into tests and available for a future admin endpoint.
+## Demo deposits
+
+Money enters the system from a *treasury* wallet via `deposit()`, which writes an ordinary
+balanced transaction (treasury debit, wallet credit). So that visitors to the public demo
+can try real transfers, `POST /accounts/{id}/wallets/{wid}/demo-deposit` exposes that path
+with guard rails:
+
+- **Off by default.** Enabled only when the environment sets `DEMO_DEPOSITS_ENABLED=true`;
+  otherwise it returns `403 DEMO_DEPOSITS_DISABLED`. The public demo on Fly sets it; a
+  production deployment would not.
+- **Own wallets only.** Anyone else's wallet gets `404 WALLET_NOT_FOUND`.
+- **Capped** at 100000 minor units (1,000.00) per call (`422 DEMO_DEPOSIT_LIMIT_EXCEEDED`).
+
+## Configuration
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATABASE_URL` | local compose Postgres | SQLAlchemy URL (`postgresql+psycopg://...`) |
+| `JWT_SECRET` | `change-me-in-prod` | HMAC key for access/refresh tokens: set a long random value in any deployment |
+| `ACCESS_TTL_MIN` | `15` | Access token lifetime (minutes) |
+| `REFRESH_TTL_DAYS` | `7` | Refresh token lifetime (days) |
+| `DEMO_DEPOSITS_ENABLED` | `false` | Enables the demo deposit endpoint (see above) |
 
 ## API summary
 
@@ -92,10 +126,11 @@ curl -X POST localhost:8000/transfers -H "authorization: Bearer $TOKEN" \
 | POST | `/accounts` · GET `/accounts` | Create / list accounts |
 | POST · GET | `/accounts/{id}/wallets` | Open / list wallets |
 | GET | `/accounts/{id}/wallets/{wid}/statement` | Paginated entry history |
+| POST | `/accounts/{id}/wallets/{wid}/demo-deposit` | Demo only: fund your own wallet (off by default) |
 | POST | `/transfers` | Transfer between wallets (idempotent) |
 | GET | `/transactions/{id}` | Transaction + its ledger entries |
 | GET | `/healthz` | Liveness |
 
 ## License
 
-MIT
+[MIT](LICENSE)

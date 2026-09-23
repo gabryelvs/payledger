@@ -10,12 +10,12 @@ from app.deps import current_user
 from app.errors import error_response
 from app.models.user import User
 from app.schemas.transfer import TransferIn
-from app.services.idempotency import IdempotencyConflict, lookup, remember
+from app.services.idempotency import IdempotencyConflict
 from app.services.transfer_service import (
     CurrencyMismatch,
     InsufficientFunds,
     WalletNotFound,
-    transfer,
+    submit_transfer,
 )
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
@@ -31,28 +31,24 @@ def make_transfer(
     body: TransferIn,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", max_length=100
+    ),
 ) -> JSONResponse:
-    req_hash = _hash(body)
-
-    if idempotency_key:
-        try:
-            cached = lookup(db, idempotency_key, req_hash)
-        except IdempotencyConflict:
-            return error_response(
-                409, "IDEMPOTENCY_CONFLICT", "key reused with a different request body"
-            )
-        if cached is not None:
-            return JSONResponse(status_code=201, content=cached)
-
     try:
-        txn = transfer(
+        result = submit_transfer(
             db,
+            user.id,
             body.from_wallet_id,
             body.to_wallet_id,
             body.amount_minor,
             body.currency,
             idempotency_key,
+            _hash(body),
+        )
+    except IdempotencyConflict:
+        return error_response(
+            409, "IDEMPOTENCY_CONFLICT", "key reused with a different request body"
         )
     except InsufficientFunds:
         return error_response(
@@ -64,8 +60,4 @@ def make_transfer(
         )
     except WalletNotFound:
         return error_response(404, "WALLET_NOT_FOUND", "wallet does not exist")
-
-    result = {"transaction_id": txn.id, "status": txn.status}
-    if idempotency_key:
-        remember(db, idempotency_key, req_hash, result)
     return JSONResponse(status_code=201, content=result)

@@ -17,3 +17,20 @@ class WalletOut(BaseModel):
     id: int
     currency: str
     balance_minor: int
+
+
+class DemoDepositIn(BaseModel):
+    amount_minor: int
+
+    @field_validator("amount_minor")
+    @classmethod
+    def positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("amount_minor must be positive")
+        return v
+
+
+class DemoDepositOut(BaseModel):
+    transaction_id: int
+    status: str
+    balance_minor: int

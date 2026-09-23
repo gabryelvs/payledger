@@ -14,3 +14,13 @@ def create_account(db: Session, user_id: int, name: str) -> Account:
 
 def list_accounts(db: Session, user_id: int) -> list[Account]:
     return list(db.execute(select(Account).where(Account.user_id == user_id)).scalars())
+
+
+def get_owned_account(db: Session, user_id: int, account_id: int) -> Account | None:
+    """The account, or None if it does not exist *or* belongs to someone else.
+
+    Callers turn None into a 404 either way, so a caller cannot probe which ids exist.
+    """
+    return db.execute(
+        select(Account).where(Account.id == account_id, Account.user_id == user_id)
+    ).scalar_one_or_none()
