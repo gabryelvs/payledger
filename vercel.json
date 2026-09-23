@@ -1,5 +1,9 @@
 {
-  "regions": ["lhr1"],
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "regions": [
+    "lhr1"
+  ],
   "functions": {
     "app/main.py": {
       "excludeFiles": "{tests/**,migrations/**,docs/**}"
